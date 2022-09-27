@@ -21,6 +21,24 @@
 #include "bt_parse.h"
 #include "input_buffer.h"
 
+#define PACKETLEN 1500
+#define BUFLEN 100
+
+typedef struct header_s {
+  short magicnum;
+  char version;
+  char packet_type;
+  short header_len;
+  short packet_len; 
+  u_int seq_num;
+  u_int ack_num;
+} header_t;  
+
+typedef struct data_packet {
+  header_t header;
+  char data[BUFLEN];
+} data_packet_t;
+
 void peer_run(bt_config_t *config);
 
 int main(int argc, char **argv) {
@@ -66,8 +84,22 @@ void process_inbound_udp(int sock) {
 }
 
 void process_get(char *chunkfile, char *outputfile) {
-  printf("PROCESS GET SKELETON CODE CALLED.  Fill me in!  (%s, %s)\n", 
+  printf("PROCESS GET SKELETON CODE CALLED.  Fill me in! I've been doing! (%s, %s)\n", 
 	chunkfile, outputfile);
+  FILE* get_chunk_file = fopen(chunkfile, "r");
+  assert(get_chunk_file != NULL);
+
+  u_int32_t id, hash;
+  /*question: how many bits does hash have? what to use?*/
+
+  /*First we try reading the get_chunk_file*/
+  char line[BT_FILENAME_LEN];
+  while (fgets(line, BT_FILENAME_LEN, get_chunk_file) != NULL) {
+    if (line[0] == '#') continue;
+    assert(sscanf(line, "%d %d", ))
+  }
+
+  fclose(get_chunk_file);
 }
 
 void handle_user_input(char *line, void *cbdata) {
