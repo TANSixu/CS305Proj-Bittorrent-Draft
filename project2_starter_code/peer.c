@@ -20,9 +20,13 @@
 #include "spiffy.h"
 #include "bt_parse.h"
 #include "input_buffer.h"
+#include "chunk.h"
 
 #define PACKETLEN 1500
 #define BUFLEN 100
+#define HASHASCIILEN 40
+#define HASHBTYELEN 20
+#define HEADERLEN 16
 
 typedef struct header_s {
   short magicnum;
@@ -38,6 +42,69 @@ typedef struct data_packet {
   header_t header;
   char data[BUFLEN];
 } data_packet_t;
+
+typedef struct pkt_node
+{
+  /*bnode is the node in sliding window buffer*/ 
+  data_packet_t* pkt;
+  struct pkt_node* next;
+  struct pkt_node* prev;
+}pnode_t;
+
+typedef struct pkt_list
+{
+  /*blist is the list of the sliding window buffer. Note that this buffer is only applied to data pkt*/
+  /*this can be used to buf or other pkt container, e.g. many whohas pkt*/
+  int len;
+  pnode_t* head;
+  pnode_t* tail;
+}plist_t;
+
+void init_plist(plist_t **list){
+  *list = (plist_t*) malloc(sizeof(plist_t));
+  assert(list != NULL);
+  (*list)->len = 0;
+
+  (*list)->head = (pnode_t*)malloc(sizeof(pnode_t));
+  (*list)->tail = (pnode_t*)malloc(sizeof(pnode_t));
+  assert((*list)->head != NULL);
+  assert((*list)->tail != NULL);
+  (*list)->head->next = (*list)->tail;
+  (*list)->head->prev = NULL;
+  (*list)->tail->prev = (*list)->head;
+  (*list)->tail->next = NULL;
+
+  (*list)->head->pkt = NULL;
+}
+
+void push_back_pnode(plist_t *list, data_packet_t* pkt){
+  pnode_t* temp = (pnode_t*)malloc(sizeof(pnode_t));
+  assert(temp != NULL);
+  temp->pkt = pkt;
+  temp->prev = list->tail->prev;
+  temp->next = list -> tail;
+  list->tail->prev->next = temp;
+  list->tail->prev = temp;
+}
+
+void remove_pnode(plist_t *list, data_packet_t *pkt){
+  pnode_t *p;
+  for ( p = list->head->next; p != list->tail; p = p->next)
+  {
+    if(p->pkt == pkt){
+      // TODO: use ptr or dereference?
+      p->prev->next = p->next;
+      p->next->prev = p->prev;
+      free(p->pkt);
+      free(p);
+    }
+  }
+}
+
+// TODO: add remove head
+
+
+
 
 void peer_run(bt_config_t *config);
 
@@ -83,23 +150,46 @@ void process_inbound_udp(int sock) {
 	 buf);
 }
 
-void process_get(char *chunkfile, char *outputfile) {
-  printf("PROCESS GET SKELETON CODE CALLED.  Fill me in! I've been doing! (%s, %s)\n", 
-	chunkfile, outputfile);
+
+plist_t* make_whohas_pkt(char *chunkfile){
+#define PADLEN 4
   FILE* get_chunk_file = fopen(chunkfile, "r");
   assert(get_chunk_file != NULL);
 
-  u_int32_t id, hash;
-  /*question: how many bits does hash have? what to use?*/
+  u_int32_t id;
+  char hash_ascii[HASHASCIILEN];
+  uint8_t hash_bin[HASHBTYELEN];
 
-  /*First we try reading the get_chunk_file*/
+  /*First we try reading the get_chunk_file and fit them into pkt*/
   char line[BT_FILENAME_LEN];
+
+  /*Firstly allocate a big enough buf, shrink if not full*/
+  char data = calloc(PACKETLEN-PADLEN-HEADERLEN, sizeof(char));
+  u_int16_t datalen = 0;
   while (fgets(line, BT_FILENAME_LEN, get_chunk_file) != NULL) {
     if (line[0] == '#') continue;
-    assert(sscanf(line, "%d %d", ))
+    assert(sscanf(line, "%d %s", &id, hash_ascii) != 0);
+    if(datalen + PADLEN + HASHBTYELEN <= PACKETLEN){
+      // case that the chunk can still be fit into last pkt
+      ascii2hex(hash_ascii, HASHASCIILEN, hash_bin);
+      memcpy(data+datalen, hash_bin, HASHBTYELEN);
+      datalen += HASHBTYELEN;
+    }else{
+      // Unfortuately, we have to add a new pkt
+      
+    }
+
+
   }
 
   fclose(get_chunk_file);
+}
+
+
+void process_get(char *chunkfile, char *outputfile) {
+  printf("PROCESS GET SKELETON CODE CALLED.  Fill me in! I've been doing! (%s, %s)\n", 
+	chunkfile, outputfile);
+
 }
 
 void handle_user_input(char *line, void *cbdata) {
