@@ -8,7 +8,7 @@
  * Skeleton for 15-441 Project 2.
  *
  */
-
+#include <assert.h>
 #include <sys/types.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -27,20 +27,37 @@
 #define HASHASCIILEN 40
 #define HASHBTYELEN 20
 #define HEADERLEN 16
+#define MAGIC 15441
+
+bt_config_t config;
+int sock;
 
 typedef struct header_s {
   short magicnum;
-  char version;
-  char packet_type;
-  short header_len;
-  short packet_len; 
-  u_int seq_num;
-  u_int ack_num;
+  uint8_t version;
+  uint8_t packet_type;
+  uint16_t header_len;
+  uint16_t packet_len; 
+  uint32_t seq_num;
+  uint32_t ack_num;
 } header_t;  
+
+header_t* make_header(uint8_t type, uint16_t pkt_len, uint32_t seq, uint32_t ack){
+  // need to converto to network order!!
+  header_t* my_header = malloc(sizeof(header_t));
+  my_header->magicnum = htons(MAGIC);
+  my_header->version = 1;
+  my_header->packet_type = type;
+  my_header->header_len = htons(HEADERLEN);
+  my_header->seq_num = htonl(seq);
+  my_header->ack_num = htonl(ack);
+  return my_header;
+}
+
 
 typedef struct data_packet {
   header_t header;
-  char data[BUFLEN];
+  char data[PACKETLEN-HEADERLEN];
 } data_packet_t;
 
 typedef struct pkt_node
@@ -85,6 +102,7 @@ void push_back_pnode(plist_t *list, data_packet_t* pkt){
   temp->next = list -> tail;
   list->tail->prev->next = temp;
   list->tail->prev = temp;
+  list->len += 1;
 }
 
 void remove_pnode(plist_t *list, data_packet_t *pkt){
@@ -109,8 +127,6 @@ void remove_pnode(plist_t *list, data_packet_t *pkt){
 void peer_run(bt_config_t *config);
 
 int main(int argc, char **argv) {
-  bt_config_t config;
-
   bt_init(&config, argc, argv);
 
   DPRINTF(DEBUG_INIT, "peer.c main beginning\n");
@@ -164,31 +180,85 @@ plist_t* make_whohas_pkt(char *chunkfile){
   char line[BT_FILENAME_LEN];
 
   /*Firstly allocate a big enough buf, shrink if not full*/
-  char data = calloc(PACKETLEN-PADLEN-HEADERLEN, sizeof(char));
-  u_int16_t datalen = 0;
+  char* data = calloc(PACKETLEN-HEADERLEN, sizeof(char));
+  u_int8_t datalen = 0;
+  char* pad = calloc(3, sizeof(uint8_t));
+
+  //make a list to store all pkt
+  plist_t* list;
+  init_plist(&list);
+
   while (fgets(line, BT_FILENAME_LEN, get_chunk_file) != NULL) {
     if (line[0] == '#') continue;
     assert(sscanf(line, "%d %s", &id, hash_ascii) != 0);
-    if(datalen + PADLEN + HASHBTYELEN <= PACKETLEN){
-      // case that the chunk can still be fit into last pkt
-      ascii2hex(hash_ascii, HASHASCIILEN, hash_bin);
-      memcpy(data+datalen, hash_bin, HASHBTYELEN);
-      datalen += HASHBTYELEN;
-    }else{
-      // Unfortuately, we have to add a new pkt
-      
-    }
+    ascii2hex(hash_ascii, HASHASCIILEN, hash_bin);
+    memcpy(data+datalen+PADLEN, hash_bin, HASHBTYELEN);
+    datalen += HASHBTYELEN;
 
+    // Case that pkt can fit more chunk hashes
+    if(datalen + PADLEN + HASHBTYELEN <= PACKETLEN) continue;
 
+    // Unfortuately, we have to add a new pkt
+    //Step1. produce a pkt for last data
+    // Step 1.1 make header
+    header_t* pkt_header = make_header(0, datalen+PADLEN, 1, 0);
+    data_packet_t* pkt = malloc(sizeof(data_packet_t));
+    pkt->header = *pkt_header;
+    // Step 1.2 make data pkt pad
+    memcpy(data, &datalen, sizeof(uint8_t));
+    memcpy(data+sizeof(uint8_t), pad, 3*sizeof(uint8_t));
+    memcpy(pkt->data, data, PACKETLEN-HEADERLEN);
+    // Step 1.3 add into list
+    push_back_pnode(list, pkt);
+
+    //Step 2 clean pkt and prepare for next datapkt
+    free(data);
+    free(pkt_header);
+    datalen = 0;
   }
+  // Default add last pkt
+  //Step1. produce a pkt for last data
+  // Step 1.1 make header
+  header_t* pkt_header = make_header(0, datalen+PADLEN, 1, 0);
+  data_packet_t* pkt = malloc(sizeof(data_packet_t));
+  pkt->header = *pkt_header;
+  // Step 1.2 make data pkt pad
+  memcpy(data, &datalen, sizeof(uint8_t));
+  memcpy(data+sizeof(uint8_t), pad, 3*sizeof(uint8_t));
+  memcpy(pkt->data, data, PACKETLEN-HEADERLEN);
+  // Step 1.3 add into list
+  push_back_pnode(list, pkt);
+
+  //Step 2 clean pkt and prepare for next datapkt
+  free(data);
+  free(pkt_header);
+  datalen = 0;
 
   fclose(get_chunk_file);
+  return list;
+}
+
+void flood_whohas(plist_t* whohas_list){
+  bt_peer_t* peers = config.peers;
+
+  for(pnode_t* pnode = whohas_list->head->next; pnode != whohas_list->tail; pnode = pnode->next){
+    for(bt_peer_t* pr = peers; pr->next!=NULL; pr = pr->next){
+      if(pr->id == config.identity){continue;}
+
+      // TODO: handle error case
+      sendto(sock, pnode->pkt, PACKETLEN, 0, &pr->addr, sizeof(pr->addr));
+    }
+  }
 }
 
 
 void process_get(char *chunkfile, char *outputfile) {
   printf("PROCESS GET SKELETON CODE CALLED.  Fill me in! I've been doing! (%s, %s)\n", 
 	chunkfile, outputfile);
+  // Step1. flood who has pkt to all
+  plist_t* whohas_list = make_whohas_pkt(chunkfile);
+  printf("flooding whohas! Whohas pkt count: %d\n", whohas_list->len);
+  flood_whohas(whohas_list);
 
 }
 
@@ -207,7 +277,6 @@ void handle_user_input(char *line, void *cbdata) {
 
 
 void peer_run(bt_config_t *config) {
-  int sock;
   struct sockaddr_in myaddr;
   fd_set readfds;
   struct user_iobuf *userbuf;
