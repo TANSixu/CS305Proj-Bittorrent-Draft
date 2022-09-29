@@ -19,6 +19,13 @@
 #define BT_FILENAME_LEN 255
 #define BT_MAX_PEERS 1024
 
+typedef struct bt_haschunks_table
+{
+  uint32_t id;
+  char chunk_hash[40];
+  struct bt_haschunks_table* next;
+} bt_haschunks_t;
+
 typedef struct bt_peer_s {
   short  id;
   struct sockaddr_in addr;
@@ -38,6 +45,7 @@ struct bt_config_s {
   char **argv;
 
   bt_peer_t *peers;
+  bt_haschunks_t *haschunks;
 };
 typedef struct bt_config_s bt_config_t;
 
@@ -45,6 +53,7 @@ typedef struct bt_config_s bt_config_t;
 void bt_init(bt_config_t *c, int argc, char **argv);
 void bt_parse_command_line(bt_config_t *c);
 void bt_parse_peer_list(bt_config_t *c);
+void bt_parse_haschunk_list(bt_config_t *c);
 void bt_dump_config(bt_config_t *c);
 bt_peer_t *bt_peer_info(const bt_config_t *c, int peer_id);
 

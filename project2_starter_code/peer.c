@@ -23,11 +23,12 @@
 #include "chunk.h"
 
 #define PACKETLEN 1500
-#define BUFLEN 100
+#define BUFLEN PACKETLEN
 #define HASHASCIILEN 40
 #define HASHBTYELEN 20
 #define HEADERLEN 16
 #define MAGIC 15441
+#define PADLEN 4
 
 bt_config_t config;
 int sock;
@@ -150,6 +151,9 @@ int main(int argc, char **argv) {
 }
 
 
+
+
+
 void process_inbound_udp(int sock) {
   #define BUFLEN 1500
   struct sockaddr_in from;
@@ -159,16 +163,68 @@ void process_inbound_udp(int sock) {
   fromlen = sizeof(from);
   spiffy_recvfrom(sock, buf, BUFLEN, 0, (struct sockaddr *) &from, &fromlen);
 
-  printf("PROCESS_INBOUND_UDP SKELETON -- replace!\n"
+  printf("PROCESS_INBOUND_UDP SKELETON -- replace I've been doing!!\n"
 	 "Incoming message from %s:%d\n%s\n\n", 
 	 inet_ntoa(from.sin_addr),
 	 ntohs(from.sin_port),
 	 buf);
+  
+  // Step1. parse udp pkt
+  // TODO: check the integrity of pkt
+  // TODO: If vary pkt length, need to read header first
+  data_packet_t* recv_pkt = (data_packet_t*)buf;
+  switch (recv_pkt->header.packet_type)
+  {
+  case 0:{
+    // received who has pkt
+    // Step1. get the numebr of chunks
+    uint8_t chunknums;
+    memcpy(&chunknums, (recv_pkt->data), sizeof(uint8_t));
+    printf("The chunk in received pkt is %d\n", chunknums);
+
+    // Step2. check all hashes
+    char hash_ascii[HASHASCIILEN];
+    char hash_byte[HASHBTYELEN];
+    uint8_t haschunk_cnt = 0;
+    char data[chunknums*HASHBTYELEN+PADLEN];
+    for(int i=0; i < chunknums; ++i){
+      memcpy(hash_byte, recv_pkt->data+PADLEN+i*HASHBTYELEN, sizeof(uint8_t)*HASHBTYELEN);
+      hex2ascii(hash_byte, HASHBTYELEN, hash_ascii);
+      for(bt_haschunks_t* hc = config.haschunks; hc != NULL; hc = hc->next){
+        // printf("chunk: %s, pkt: %s\n", hc->chunk_hash, hash_ascii);
+        if(strncmp(hc->chunk_hash, hash_ascii, HASHASCIILEN) == 0){
+          memcpy(data+PADLEN+haschunk_cnt*HASHBTYELEN, hash_byte, HASHBTYELEN);
+          haschunk_cnt++;
+        }
+      }
+    }
+    // Step3. send Ihave if cnt if not zero
+    if(haschunk_cnt != 0){
+      data_packet_t *ihave_pkt = malloc(sizeof(data_packet_t));
+      header_t* header = make_header(1, haschunk_cnt*HASHBTYELEN+HASHBTYELEN+HEADERLEN, 1, 1);
+      ihave_pkt->header = *header;
+      memcpy(ihave_pkt->data, &haschunk_cnt, sizeof(uint8_t));
+      memset(ihave_pkt->data+1, 0, 3*sizeof(uint8_t));
+      memcpy(ihave_pkt->data+PADLEN, data, haschunk_cnt*HASHBTYELEN);
+      sendto(sock, ihave_pkt, PACKETLEN, 0, &from, fromlen);
+    }
+  }
+    break;
+
+  case 1:{
+    // received IHAVE pkt
+    uint8_t chunknums;
+    memcpy(&chunknums, (recv_pkt->data), sizeof(uint8_t));
+    printf("The chunk in received pkt in IHAVE is %d\n", chunknums);
+  }
+  
+  default:
+    break;
+  }
 }
 
 
 plist_t* make_whohas_pkt(char *chunkfile){
-#define PADLEN 4
   FILE* get_chunk_file = fopen(chunkfile, "r");
   assert(get_chunk_file != NULL);
 
@@ -181,7 +237,7 @@ plist_t* make_whohas_pkt(char *chunkfile){
 
   /*Firstly allocate a big enough buf, shrink if not full*/
   char* data = calloc(PACKETLEN-HEADERLEN, sizeof(char));
-  u_int8_t datalen = 0;
+  u_int8_t chunknum = 0;
   char* pad = calloc(3, sizeof(uint8_t));
 
   //make a list to store all pkt
@@ -192,20 +248,20 @@ plist_t* make_whohas_pkt(char *chunkfile){
     if (line[0] == '#') continue;
     assert(sscanf(line, "%d %s", &id, hash_ascii) != 0);
     ascii2hex(hash_ascii, HASHASCIILEN, hash_bin);
-    memcpy(data+datalen+PADLEN, hash_bin, HASHBTYELEN);
-    datalen += HASHBTYELEN;
+    memcpy(data+chunknum*HASHBTYELEN+PADLEN, hash_bin, HASHBTYELEN);
+    chunknum += 1;
 
     // Case that pkt can fit more chunk hashes
-    if(datalen + PADLEN + HASHBTYELEN <= PACKETLEN) continue;
+    if(chunknum*HASHBTYELEN + PADLEN + HASHBTYELEN <= PACKETLEN) continue;
 
     // Unfortuately, we have to add a new pkt
     //Step1. produce a pkt for last data
     // Step 1.1 make header
-    header_t* pkt_header = make_header(0, datalen+PADLEN, 1, 0);
+    header_t* pkt_header = make_header(0, chunknum*HASHBTYELEN+PADLEN, 1, 0);
     data_packet_t* pkt = malloc(sizeof(data_packet_t));
     pkt->header = *pkt_header;
     // Step 1.2 make data pkt pad
-    memcpy(data, &datalen, sizeof(uint8_t));
+    memcpy(data, &chunknum, sizeof(uint8_t));
     memcpy(data+sizeof(uint8_t), pad, 3*sizeof(uint8_t));
     memcpy(pkt->data, data, PACKETLEN-HEADERLEN);
     // Step 1.3 add into list
@@ -214,16 +270,16 @@ plist_t* make_whohas_pkt(char *chunkfile){
     //Step 2 clean pkt and prepare for next datapkt
     free(data);
     free(pkt_header);
-    datalen = 0;
+    chunknum = 0;
   }
   // Default add last pkt
   //Step1. produce a pkt for last data
   // Step 1.1 make header
-  header_t* pkt_header = make_header(0, datalen+PADLEN, 1, 0);
+  header_t* pkt_header = make_header(0, chunknum*HASHBTYELEN+PADLEN+HEADERLEN, 1, 0);
   data_packet_t* pkt = malloc(sizeof(data_packet_t));
   pkt->header = *pkt_header;
   // Step 1.2 make data pkt pad
-  memcpy(data, &datalen, sizeof(uint8_t));
+  memcpy(data, &chunknum, sizeof(uint8_t));
   memcpy(data+sizeof(uint8_t), pad, 3*sizeof(uint8_t));
   memcpy(pkt->data, data, PACKETLEN-HEADERLEN);
   // Step 1.3 add into list
@@ -232,7 +288,7 @@ plist_t* make_whohas_pkt(char *chunkfile){
   //Step 2 clean pkt and prepare for next datapkt
   free(data);
   free(pkt_header);
-  datalen = 0;
+  chunknum = 0;
 
   fclose(get_chunk_file);
   return list;
@@ -259,7 +315,7 @@ void process_get(char *chunkfile, char *outputfile) {
   plist_t* whohas_list = make_whohas_pkt(chunkfile);
   printf("flooding whohas! Whohas pkt count: %d\n", whohas_list->len);
   flood_whohas(whohas_list);
-
+  printf("flooding whohas end!\n");
 }
 
 void handle_user_input(char *line, void *cbdata) {

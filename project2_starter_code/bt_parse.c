@@ -30,6 +30,7 @@ void bt_init(bt_config_t *config, int argc, char **argv) {
   strcpy(config->peer_list_file, "nodes.map");
   config->argc = argc;
   config->argv = argv;
+  config->haschunks=NULL;
 }
 
 void bt_usage() {
@@ -106,6 +107,7 @@ void bt_parse_command_line(bt_config_t *config) {
   }
 
   bt_parse_peer_list(config);
+  bt_parse_haschunk_list(config);
 
   if (config->identity == 0) {
     fprintf(stderr, "bt_parse error:  Node identity must not be zero!\n");
@@ -154,6 +156,26 @@ void bt_parse_peer_list(bt_config_t *config) {
     node->next = config->peers;
     config->peers = node;
   }
+}
+
+void bt_parse_haschunk_list(bt_config_t *c){
+  uint32_t id;
+  char hash[40];
+  bt_haschunks_t *hchunk;
+  FILE *f = fopen(c->has_chunk_file, "r");
+  char line[BT_FILENAME_LEN];
+  assert(f != NULL);
+  while (fgets(line, BT_FILENAME_LEN, f) != NULL) {
+    if (line[0] == '#') continue;
+    assert(sscanf(line, "%d %s", &id, hash) != 0);
+    hchunk = malloc(sizeof(bt_haschunks_t));
+    hchunk->id = id;
+    // Copy hash ascii
+    memcpy(hchunk->chunk_hash, hash, 40);
+    hchunk->next = c->haschunks;
+    c->haschunks = hchunk;
+  }
+  
 }
 
 void bt_dump_config(bt_config_t *config) {
