@@ -30,6 +30,7 @@
 #define MAGIC 15441
 #define PADLEN 4
 #define CHUNKSIZE 512*1024
+#define DATALEN PACKETLEN-HEADERLEN
 
 bt_config_t config;
 int sock;
@@ -59,7 +60,7 @@ header_t* make_header(uint8_t type, uint16_t pkt_len, uint32_t seq, uint32_t ack
 
 typedef struct data_packet {
   header_t header;
-  char data[PACKETLEN-HEADERLEN];
+  char data[DATALEN];
 } data_packet_t;
 
 typedef struct pkt_node
@@ -252,31 +253,32 @@ void process_inbound_udp(int sock) {
     }
 
     // Step2. prepare the file chunk
-    char* chunk_content = malloc(sizeof(CHUNKSIZE));
-    FILE *f = fopen(config.chunk_file, "r");
+    char* chunk_content = malloc(CHUNKSIZE);
+    FILE *f = fopen(config.chunk_file, "rb");
+    assert(f != NULL);
     fseek(f, CHUNKSIZE*chunk_id, SEEK_SET);
     // TODO: error case handling
-    int fbyte_cnt = fread(chunk_content, sizeof(char), CHUNKSIZE, f);
-    fclose(f);
+    int fbyte_cnt = fread(chunk_content, sizeof(uint8_t), CHUNKSIZE, f);
 
+    fclose(f);
     // Step3. send DATA pkt
     // Step3.1 How many pkt needed
-    int data_pkt_num = fbyte_cnt/(PACKETLEN-HEADERLEN)+1;
+    int data_pkt_num = fbyte_cnt/(DATALEN);
     // Step3.2 Send DATA pkt
-    for(int i=1; i < data_pkt_num; ++i){
+    for(int i=1; i <= data_pkt_num; ++i){
       // handle first n-1, since they are of same size, seq starts from 1, i is seq
       header_t* header = make_header(3, HEADERLEN+PACKETLEN, i, 0);
       data_packet_t* dpkt = malloc(sizeof(data_packet_t));
       dpkt->header = *header;
-      memcpy(dpkt->data, chunk_content+(PACKETLEN-HEADERLEN)*i, sizeof(char)*(PACKETLEN-HEADERLEN));
+      memcpy(dpkt->data, chunk_content+(DATALEN)*(i-1), sizeof(char)*(DATALEN));
       sendto(sock, dpkt, PACKETLEN, 0, &from, fromlen);
     }
     // Handle the last one
-    int remain_byte = fbyte_cnt - data_pkt_num*(PACKETLEN-HEADERLEN);
-    header_t* header = make_header(3, HEADERLEN+PACKETLEN, data_pkt_num, 0);
+    int remain_byte = fbyte_cnt - data_pkt_num*(DATALEN);
+    header_t* header = make_header(3, HEADERLEN+PACKETLEN, data_pkt_num+1, 0);
     data_packet_t* dpkt = malloc(sizeof(data_packet_t));
     dpkt->header = *header;
-    memcpy(dpkt->data, chunk_content+(PACKETLEN-HEADERLEN)*data_pkt_num, sizeof(char)*remain_byte);
+    memcpy(dpkt->data, chunk_content+(DATALEN)*(data_pkt_num), sizeof(char)*remain_byte);
     sendto(sock, dpkt, PACKETLEN, 0, &from, fromlen);
 
     free(chunk_content);
@@ -305,7 +307,7 @@ plist_t* make_whohas_pkt(char *chunkfile){
   char line[BT_FILENAME_LEN];
 
   /*Firstly allocate a big enough buf, shrink if not full*/
-  char* data = calloc(PACKETLEN-HEADERLEN, sizeof(char));
+  char* data = calloc(DATALEN, sizeof(char));
   u_int8_t chunknum = 0;
   char* pad = calloc(3, sizeof(uint8_t));
 
@@ -332,7 +334,7 @@ plist_t* make_whohas_pkt(char *chunkfile){
     // Step 1.2 make data pkt pad
     memcpy(data, &chunknum, sizeof(uint8_t));
     memcpy(data+sizeof(uint8_t), pad, 3*sizeof(uint8_t));
-    memcpy(pkt->data, data, PACKETLEN-HEADERLEN);
+    memcpy(pkt->data, data, DATALEN);
     // Step 1.3 add into list
     push_back_pnode(list, pkt);
 
@@ -350,7 +352,7 @@ plist_t* make_whohas_pkt(char *chunkfile){
   // Step 1.2 make data pkt pad
   memcpy(data, &chunknum, sizeof(uint8_t));
   memcpy(data+sizeof(uint8_t), pad, 3*sizeof(uint8_t));
-  memcpy(pkt->data, data, PACKETLEN-HEADERLEN);
+  memcpy(pkt->data, data, DATALEN);
   // Step 1.3 add into list
   push_back_pnode(list, pkt);
 
