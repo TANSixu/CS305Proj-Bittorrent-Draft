@@ -164,10 +164,9 @@ void process_inbound_udp(int sock) {
   spiffy_recvfrom(sock, buf, BUFLEN, 0, (struct sockaddr *) &from, &fromlen);
 
   printf("PROCESS_INBOUND_UDP SKELETON -- replace I've been doing!!\n"
-	 "Incoming message from %s:%d\n%s\n\n", 
+	 "Incoming message from %s:%d\n\n", 
 	 inet_ntoa(from.sin_addr),
-	 ntohs(from.sin_port),
-	 buf);
+	 ntohs(from.sin_port));
   
   // Step1. parse udp pkt
   // TODO: check the integrity of pkt
@@ -186,14 +185,14 @@ void process_inbound_udp(int sock) {
     char hash_ascii[HASHASCIILEN];
     char hash_byte[HASHBTYELEN];
     uint8_t haschunk_cnt = 0;
-    char data[chunknums*HASHBTYELEN+PADLEN];
+    char data[chunknums*HASHBTYELEN];
     for(int i=0; i < chunknums; ++i){
       memcpy(hash_byte, recv_pkt->data+PADLEN+i*HASHBTYELEN, sizeof(uint8_t)*HASHBTYELEN);
       hex2ascii(hash_byte, HASHBTYELEN, hash_ascii);
       for(bt_haschunks_t* hc = config.haschunks; hc != NULL; hc = hc->next){
-        // printf("chunk: %s, pkt: %s\n", hc->chunk_hash, hash_ascii);
+        printf("I have chunk: %s, pkt: %s\n", hc->chunk_hash, hash_ascii);
         if(strncmp(hc->chunk_hash, hash_ascii, HASHASCIILEN) == 0){
-          memcpy(data+PADLEN+haschunk_cnt*HASHBTYELEN, hash_byte, HASHBTYELEN);
+          memcpy(data+haschunk_cnt*HASHBTYELEN, hash_byte, HASHBTYELEN);
           haschunk_cnt++;
         }
       }
@@ -208,15 +207,40 @@ void process_inbound_udp(int sock) {
       memcpy(ihave_pkt->data+PADLEN, data, haschunk_cnt*HASHBTYELEN);
       sendto(sock, ihave_pkt, PACKETLEN, 0, &from, fromlen);
     }
-  }
-    break;
+  } break;
 
   case 1:{
     // received IHAVE pkt
+    // Step1. get the chunknums
     uint8_t chunknums;
     memcpy(&chunknums, (recv_pkt->data), sizeof(uint8_t));
-    printf("The chunk in received pkt in IHAVE is %d\n", chunknums);
-  }
+
+    // Step2. get hashes and send GET pkt
+    char hash_byte[HASHBTYELEN];
+    char hash_ascii[HASHASCIILEN];
+    char data[HASHBTYELEN];
+    for(int i=0; i < chunknums; ++i){
+      memcpy(hash_byte, recv_pkt->data+PADLEN+i*HASHBTYELEN, sizeof(uint8_t)*HASHBTYELEN);
+      header_t* header_get = make_header(2, HEADERLEN+HASHBTYELEN, 0, 0);
+      data_packet_t* pkt_get = malloc(sizeof(data_packet_t));
+      pkt_get->header = *header_get;
+      memcpy(pkt_get->data, hash_byte, HASHBTYELEN);
+
+      binary2hex(hash_byte, HASHBTYELEN, hash_ascii);
+      printf("sending GET: %s\n", hash_ascii);
+      sendto(sock, pkt_get, PACKETLEN, 0, &from, fromlen);
+    }
+  }break;
+
+  case 2:{
+    // received GET pkt
+    // Step1. get hash_btye from pkt
+    char hash_byte[HASHBTYELEN];
+    char hash_ascii[HASHASCIILEN];
+    memcpy(hash_byte, recv_pkt->data, sizeof(uint8_t)*HASHBTYELEN);
+    hex2ascii(hash_byte, HASHBTYELEN, hash_ascii);
+    printf("receiving GET %s\n", hash_ascii);
+  }break;
   
   default:
     break;
@@ -296,7 +320,7 @@ plist_t* make_whohas_pkt(char *chunkfile){
 
 void flood_whohas(plist_t* whohas_list){
   bt_peer_t* peers = config.peers;
-
+  printf("flooding!\n");
   for(pnode_t* pnode = whohas_list->head->next; pnode != whohas_list->tail; pnode = pnode->next){
     for(bt_peer_t* pr = peers; pr->next!=NULL; pr = pr->next){
       if(pr->id == config.identity){continue;}
