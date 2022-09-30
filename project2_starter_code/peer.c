@@ -29,6 +29,7 @@
 #define HEADERLEN 16
 #define MAGIC 15441
 #define PADLEN 4
+#define CHUNKSIZE 512*1024
 
 bt_config_t config;
 int sock;
@@ -163,10 +164,10 @@ void process_inbound_udp(int sock) {
   fromlen = sizeof(from);
   spiffy_recvfrom(sock, buf, BUFLEN, 0, (struct sockaddr *) &from, &fromlen);
 
-  printf("PROCESS_INBOUND_UDP SKELETON -- replace I've been doing!!\n"
-	 "Incoming message from %s:%d\n\n", 
-	 inet_ntoa(from.sin_addr),
-	 ntohs(from.sin_port));
+  // printf("PROCESS_INBOUND_UDP SKELETON -- replace I've been doing!!\n"
+	//  "Incoming message from %s:%d\n\n", 
+	//  inet_ntoa(from.sin_addr),
+	//  ntohs(from.sin_port));
   
   // Step1. parse udp pkt
   // TODO: check the integrity of pkt
@@ -240,7 +241,51 @@ void process_inbound_udp(int sock) {
     memcpy(hash_byte, recv_pkt->data, sizeof(uint8_t)*HASHBTYELEN);
     hex2ascii(hash_byte, HASHBTYELEN, hash_ascii);
     printf("receiving GET %s\n", hash_ascii);
+
+    // Step. Find the id of this chunk
+    uint32_t chunk_id;
+    for(bt_haschunks_t* hc = config.haschunks; hc != NULL; hc = hc->next){
+        printf("I have chunk: %s, pkt: %s\n", hc->chunk_hash, hash_ascii);
+        if(strncmp(hc->chunk_hash, hash_ascii, HASHASCIILEN) == 0){
+          chunk_id = hc->id;
+        }
+    }
+
+    // Step2. prepare the file chunk
+    char* chunk_content = malloc(sizeof(CHUNKSIZE));
+    FILE *f = fopen(config.chunk_file, "r");
+    fseek(f, CHUNKSIZE*chunk_id, SEEK_SET);
+    // TODO: error case handling
+    int fbyte_cnt = fread(chunk_content, sizeof(char), CHUNKSIZE, f);
+    fclose(f);
+
+    // Step3. send DATA pkt
+    // Step3.1 How many pkt needed
+    int data_pkt_num = fbyte_cnt/(PACKETLEN-HEADERLEN)+1;
+    // Step3.2 Send DATA pkt
+    for(int i=1; i < data_pkt_num; ++i){
+      // handle first n-1, since they are of same size, seq starts from 1, i is seq
+      header_t* header = make_header(3, HEADERLEN+PACKETLEN, i, 0);
+      data_packet_t* dpkt = malloc(sizeof(data_packet_t));
+      dpkt->header = *header;
+      memcpy(dpkt->data, chunk_content+(PACKETLEN-HEADERLEN)*i, sizeof(char)*(PACKETLEN-HEADERLEN));
+      sendto(sock, dpkt, PACKETLEN, 0, &from, fromlen);
+    }
+    // Handle the last one
+    int remain_byte = fbyte_cnt - data_pkt_num*(PACKETLEN-HEADERLEN);
+    header_t* header = make_header(3, HEADERLEN+PACKETLEN, data_pkt_num, 0);
+    data_packet_t* dpkt = malloc(sizeof(data_packet_t));
+    dpkt->header = *header;
+    memcpy(dpkt->data, chunk_content+(PACKETLEN-HEADERLEN)*data_pkt_num, sizeof(char)*remain_byte);
+    sendto(sock, dpkt, PACKETLEN, 0, &from, fromlen);
+
+    free(chunk_content);
   }break;
+
+  case 3:{
+    // received DATA pkt:
+    printf("received seq %d\n", ntohl(recv_pkt->header.seq_num));
+  }
   
   default:
     break;
