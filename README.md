@@ -16,3 +16,14 @@
 |Congestion Control|Not Start, Estimated 8 hour workload
 |Test case|Not Start
 |Spiffy interface to Python|Not Start
+
+# Important Data Structures
+bt_config_t in bt_parse.c: 
+1. peers: linked list of bt_peer_t, stroring all peers addr, port, and id
+2. haschunks: linked list of bt_haschunks_t, storing all chunks with id that this peer has
+
+pktlist in peer.c:
+linked list of pkt, used by buffer or other which needs to strore pkt
+
+# Big change
+In bt_parse.h, I changed the "chunkfile" to master_data_file, which contains all data in network, not hashes.
