@@ -66,9 +66,11 @@ typedef struct data_packet {
 typedef struct pkt_node
 {
   /*bnode is the node in sliding window buffer*/ 
+  /*pnode state: 0 for not in win, 1 for in win not acked, 2 for acked*/
   data_packet_t* pkt;
   struct pkt_node* next;
   struct pkt_node* prev;
+  int state;
 }pnode_t;
 
 typedef struct pkt_list
@@ -100,6 +102,7 @@ void init_plist(plist_t **list){
 void push_back_pnode(plist_t *list, data_packet_t* pkt){
   pnode_t* temp = (pnode_t*)malloc(sizeof(pnode_t));
   assert(temp != NULL);
+  temp->state = 0;
   temp->pkt = pkt;
   temp->prev = list->tail->prev;
   temp->next = list -> tail;
@@ -130,6 +133,8 @@ void remove_first(plist_t *list){
 
 // This buffer is used to store all pkt currently in sending window
 plist_t *sbuffer;
+int win_size = 8;
+int win_left = 0;
 
 
 void peer_run(bt_config_t *config);
@@ -186,7 +191,6 @@ void process_inbound_udp(int sock) {
     // Step1. get the numebr of chunks
     uint8_t chunknums;
     memcpy(&chunknums, (recv_pkt->data), sizeof(uint8_t));
-    printf("The chunk in received pkt is %d\n", chunknums);
 
     // Step2. check all hashes
     char hash_ascii[HASHASCIILEN];
@@ -197,7 +201,6 @@ void process_inbound_udp(int sock) {
       memcpy(hash_byte, recv_pkt->data+PADLEN+i*HASHBTYELEN, sizeof(uint8_t)*HASHBTYELEN);
       hex2ascii(hash_byte, HASHBTYELEN, hash_ascii);
       for(bt_haschunks_t* hc = config.haschunks; hc != NULL; hc = hc->next){
-        printf("I have chunk: %s, pkt: %s\n", hc->chunk_hash, hash_ascii);
         if(strncmp(hc->chunk_hash, hash_ascii, HASHASCIILEN) == 0){
           memcpy(data+haschunk_cnt*HASHBTYELEN, hash_byte, HASHBTYELEN);
           haschunk_cnt++;
@@ -234,8 +237,10 @@ void process_inbound_udp(int sock) {
       memcpy(pkt_get->data, hash_byte, HASHBTYELEN);
 
       binary2hex(hash_byte, HASHBTYELEN, hash_ascii);
-      printf("sending GET: %s\n", hash_ascii);
       sendto(sock, pkt_get, PACKETLEN, 0, &from, fromlen);
+
+      // TODO: for test only, just send one GET;
+      break;
     }
   }break;
 
@@ -246,12 +251,10 @@ void process_inbound_udp(int sock) {
     char hash_ascii[HASHASCIILEN];
     memcpy(hash_byte, recv_pkt->data, sizeof(uint8_t)*HASHBTYELEN);
     hex2ascii(hash_byte, HASHBTYELEN, hash_ascii);
-    printf("receiving GET %s\n", hash_ascii);
 
     // Step. Find the id of this chunk
     uint32_t chunk_id;
     for(bt_haschunks_t* hc = config.haschunks; hc != NULL; hc = hc->next){
-        printf("I have chunk: %s, pkt: %s\n", hc->chunk_hash, hash_ascii);
         if(strncmp(hc->chunk_hash, hash_ascii, HASHASCIILEN) == 0){
           chunk_id = hc->id;
         }
@@ -276,7 +279,8 @@ void process_inbound_udp(int sock) {
       data_packet_t* dpkt = malloc(sizeof(data_packet_t));
       dpkt->header = *header;
       memcpy(dpkt->data, chunk_content+(DATALEN)*(i-1), sizeof(char)*(DATALEN));
-      sendto(sock, dpkt, PACKETLEN, 0, &from, fromlen);
+      // not send, add to buffer instead
+      push_back_pnode(sbuffer, dpkt);
     }
     // Handle the last one
     int remain_byte = fbyte_cnt - data_pkt_num*(DATALEN);
@@ -284,9 +288,20 @@ void process_inbound_udp(int sock) {
     data_packet_t* dpkt = malloc(sizeof(data_packet_t));
     dpkt->header = *header;
     memcpy(dpkt->data, chunk_content+(DATALEN)*(data_pkt_num), sizeof(char)*remain_byte);
-    sendto(sock, dpkt, PACKETLEN, 0, &from, fromlen);
+    push_back_pnode(sbuffer, dpkt);
 
     free(chunk_content);
+
+    // Step 4. send the first window
+    pnode_t* p = sbuffer->head;
+    for(int k = 0; k < win_size; ++k){
+      p = p->next;
+      assert(p!=NULL && p!= sbuffer->tail);
+      p->state = 1;
+      sendto(sock, p->pkt, PACKETLEN, 0, &from, fromlen);
+    }
+    win_left = 1;
+
   }break;
 
   case 3:{
@@ -298,13 +313,43 @@ void process_inbound_udp(int sock) {
     header_t* header = make_header(4, HEADERLEN, 0, htonl(seq));
     data_packet_t* apkt = malloc(sizeof(data_packet_t));
     apkt->header = *header;
+    printf("sending ACK %d\n", seq);
+
     sendto(sock, apkt, PACKETLEN, 0, &from, fromlen);
     // here i didnt free header mem, not too much.
+    // TODO: add next_expect machanism!!!
   }break;
 
   case 4:{
     // received ACK pkt
-
+    uint32_t ack = ntohl(recv_pkt->header.ack_num);
+    // Step1. go to the acked pkt, remove all before it
+    for(pnode_t* p = sbuffer->head->next; p != sbuffer->tail; p = p->next){
+      if(ack == ntohl(p->pkt->header.ack_num)){
+        // found the acked one!
+        // Step1.1 remove it
+        remove_pnode(sbuffer, p);
+        ++ win_left;
+        // Step1.2 add buffer to full, send new pkt
+        p = p -> next;
+        for(int i = win_left; i < win_left+8; ++i){
+          if(p == NULL || p == sbuffer->tail){
+            break;
+          }
+          if(p->state == 1){
+            continue;
+          }
+          // valid and not in win, send and set state to 1
+          p->state = 1;
+          printf("received ACK %d, sending Seq %d", ack, ntohl(p->pkt->header.seq_num));
+          sendto(sock, p, PACKETLEN, 0, &from, fromlen);
+        }
+        break;
+      }else{
+        remove_pnode(sbuffer, p);
+        ++win_left;
+      }
+    }
   }
   
   default:
