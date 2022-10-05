@@ -116,15 +116,20 @@ void remove_pnode(plist_t *list, data_packet_t *pkt){
       // TODO: use ptr or dereference?
       p->prev->next = p->next;
       p->next->prev = p->prev;
+      list->len --;
       free(p->pkt);
       free(p);
     }
   }
 }
 
-// TODO: add remove head
+void remove_first(plist_t *list){
+  assert(list->head->next != list->tail);
+  remove_pnode(list, list->head->next);
+}
 
-
+// This buffer is used to store all pkt currently in sending window
+plist_t *sbuffer;
 
 
 void peer_run(bt_config_t *config);
@@ -286,7 +291,20 @@ void process_inbound_udp(int sock) {
 
   case 3:{
     // received DATA pkt:
-    printf("received seq %d\n", ntohl(recv_pkt->header.seq_num));
+    // printf("received seq %d\n", ntohl(recv_pkt->header.seq_num));
+    // We need to ack, and then store the data.
+    // Step1. Get SEQ num
+    uint32_t seq = ntohl(recv_pkt->header.seq_num);
+    header_t* header = make_header(4, HEADERLEN, 0, htonl(seq));
+    data_packet_t* apkt = malloc(sizeof(data_packet_t));
+    apkt->header = *header;
+    sendto(sock, apkt, PACKETLEN, 0, &from, fromlen);
+    // here i didnt free header mem, not too much.
+  }break;
+
+  case 4:{
+    // received ACK pkt
+
   }
   
   default:
@@ -429,6 +447,8 @@ void peer_run(bt_config_t *config) {
   }
   
   spiffy_init(config->identity, (struct sockaddr *)&myaddr, sizeof(myaddr));
+
+  init_plist(&sbuffer);
   
   while (1) {
     int nfds;
