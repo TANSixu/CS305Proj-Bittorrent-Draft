@@ -11,8 +11,8 @@
 |----|----|
 |Basic WHOHAS, IHAVE, GET and DATA|Finished on 9.29
 |Arrange code|9.30 In process
-|Sending buffer implementation|Not Start, Estimated 2 hour workload
-|Flow control|Not Start
+|Sending buffer implementation|Done on 10.4
+|Flow control|Done on 10.5
 |Congestion Control|Not Start, Estimated 8 hour workload
 |Test case|Not Start
 |Spiffy interface to Python|Not Start
