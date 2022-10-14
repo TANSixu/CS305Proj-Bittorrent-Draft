@@ -1,5 +1,15 @@
+from pydoc import importfile
 import socket
-import spiffy
+import Spiffy
+import ctypes
+# import os
+
+# file = './spiffy.so'
+# mod = ctypes.cdll.LoadLibrary(file)
+
+# spiffy_sento = mod.spiffy_sendto
+# spiffy_sento.argtypes = 
+
 
 class SUSTCSocket(socket.socket):
     def __init__(self) -> None:
@@ -8,7 +18,9 @@ class SUSTCSocket(socket.socket):
     
     def sendto(self, __data,  __flags, __address) -> int:
         print("call spiffy socket!\n")
-        ret = spiffy.spiffy_sendto(self.fileno, __data, len(__data), __flags, __address[0], __address[1])
+        addr = ctypes.create_string_buffer(20)
+        addr.value = __address[0].encode()
+        ret = Spiffy.spiffy_sendto(self.fileno(), __data, len(__data), __flags, addr, __address[1])
         return ret
 
     
