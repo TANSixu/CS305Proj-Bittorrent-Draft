@@ -1,6 +1,6 @@
-from ast import arg
-import pickle
-import socket
+import select
+import sys
+import simsocket
 import argparse
 import bt_utils
 
@@ -38,18 +38,23 @@ def process_inbound_udp(sock):
     pass
 
 def peer_run(config):
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        ip_port = (config.ip, config.port)
-        sock.connect(ip_port)
+    addr = (config.ip, config.port)
+    sock = simsocket.SimSocket(addr)
 
-        # TODO: spiffy_init()
+    # TODO: spiffy_init()
 
-        while True:
-            if sock is not None:
+    ready = select.select([sock, sys.stdin],[],[])
+
+    while True:
+        read_ready = ready[0]
+        if len(read_ready) > 0:
+            if sock in read_ready:
                 process_inbound_udp(sock)
 
-            print('Waiting for command input...')
-            process_user_input()
+            if sys.stdin in read_ready:
+                print('Waiting for command input...')
+                process_user_input()
+                
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
